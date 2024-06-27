@@ -1,402 +1,188 @@
-### General
+[![DOI](https://zenodo.org/badge/211859022.svg)](https://zenodo.org/badge/latestdoi/211859022)
 
-1. Install System Packages
-    
-    ```bash
-    sudo apt-get update && apt-get install -y --no-install-recommends \
-    wget \
-    git \
-    ca-certificates \
-    file
-    
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/Deep-MI/FastSurfer/blob/stable/Tutorial/Tutorial_FastSurferCNN_QuickSeg.ipynb)
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/Deep-MI/FastSurfer/blob/stable/Tutorial/Complete_FastSurfer_Tutorial.ipynb)
+
+<!-- start of content -->
+# Welcome to FastSurfer!
+##  Overview
+
+This README contains all information needed to run FastSurfer - a fast and accurate deep-learning based neuroimaging pipeline. FastSurfer provides a fully compatible [FreeSurfer](https://freesurfer.net/) alternative for volumetric analysis (within minutes) and surface-based thickness analysis (within only around 1h run time). 
+FastSurfer is transitioning to sub-millimeter resolution support throughout the pipeline.
+
+The FastSurfer pipeline consists of two main parts for segmentation and surface reconstruction.  
+
+- the segmentation sub-pipeline (`seg`) employs advanced deep learning networks for fast, accurate segmentation and volumetric calculation of the whole brain and selected substructures.
+- the surface sub-pipeline (`recon-surf`) reconstructs cortical surfaces, maps cortical labels and performs a traditional point-wise and ROI thickness analysis. 
+
+
+### Segmentation Modules 
+- approximately 5 minutes (GPU), `--seg_only` only runs this part. 
+ 
+Modules (all run by default):
+1. `asegdkt:` [FastSurferVINN](FastSurferCNN/README.md) for whole brain segmentation (deactivate with `--no_asegdkt`)
+   - the core, outputs anatomical segmentation and cortical parcellation and statistics of 95 classes, mimics FreeSurfer’s DKTatlas.
+   - requires a T1w image ([notes on input images](#requirements-to-input-images)), supports high-res (up to 0.7mm, experimental beyond that).
+   - performs bias-field correction and calculates volume statistics corrected for partial volume effects (skipped if `--no_biasfield` is passed).
+2. `cereb:` [CerebNet](CerebNet/README.md) for cerebellum sub-segmentation (deactivate with `--no_cereb`)
+   - requires `asegdkt_segfile`, outputs cerebellar sub-segmentation with detailed WM/GM delineation.
+   - requires a T1w image ([notes on input images](#requirements-to-input-images)), which will be resampled to 1mm isotropic images (no native high-res support).
+   - calculates volume statistics corrected for partial volume effects (skipped if `--no_biasfield` is passed).
+3. `hypothal`: [HypVINN](HypVINN/README.md) for hypothalamus subsegmentation (deactivate with `no_hypothal`)
+   - outputs a hypothalamic subsegmentation including 3rd ventricle, c. mammilare, fornix and optic tracts.
+   - a T1w image is highly recommended ([notes on input images](#requirements-to-input-images)), supports high-res (up to 0.7mm, but experimental beyond that).
+   - allows the additional passing of a T2w image with `--t2 <path>`, which will be registered to the T1w image (see `--reg_mode` option).
+   - calculates volume statistics corrected for partial volume effects based on the T1w image (skipped if `--no_bias_field` is passed).
+
+### Surface reconstruction
+- approximately 60-90 minutes, `--surf_only` runs only [the surface part](recon_surf/README.md).
+- supports high-resolution images (up to 0.7mm, experimental beyond that).
+
+<!-- start of image requirements -->
+### Requirements to input images
+All pipeline parts and modules require good quality MRI images, preferably from a 3T MR scanner.
+FastSurfer expects a similar image quality as FreeSurfer, so what works with FreeSurfer should also work with FastSurfer. 
+Notwithstanding module-specific limitations, resolution should be between 1mm and 0.7mm isotropic (slice thickness should not exceed 1.5mm). Preferred sequence is Siemens MPRAGE or multi-echo MPRAGE. GE SPGR should also work. See `--vox_size` flag for high-res behaviour.
+<!-- end of image requirements -->
+
+![](doc/images/teaser.png)
+
+<!-- start of getting started -->
+## Getting started
+
+### Installation 
+There are two ways to run FastSurfer (links are to installation instructions):
+
+1. In a container ([Singularity](doc/overview/INSTALL.md#singularity) or [Docker](doc/overview/INSTALL.md#docker)) (OS: [Linux](doc/overview/INSTALL.md#linux), [Windows](doc/overview/INSTALL.md#windows), [MacOS on Intel](doc/overview/INSTALL.md#docker-currently-only-supported-for-intel-cpus)),
+2. As a [native install](doc/overview/INSTALL.md#native-ubuntu-2004-or-ubuntu-2204) (all OS for segmentation part). 
+
+We recommended you use Singularity or Docker on a Linux host system with a GPU. The images we provide on [DockerHub](https://hub.docker.com/r/deepmi/fastsurfer) conveniently include everything needed for FastSurfer. You will also need a [FreeSurfer license file](https://surfer.nmr.mgh.harvard.edu/fswiki/License) for the [Surface pipeline](#surface-reconstruction). We have detailed per-OS Installation instructions in the [INSTALL.md file](doc/overview/INSTALL.md).
+
+### Usage
+
+All installation methods use the `run_fastsurfer.sh` call interface (replace `*fastsurfer-flags*` with [FastSurfer flags](doc/overview/FLAGS.md#required-arguments)), which is the general starting point for FastSurfer. However, there are different ways to call this script depending on the installation, which we explain here:
+
+1. For container installations, you need to define the hardware and mount the folders with the input (`/data`) and output data (`/output`):  
+   (a) For __singularity__, the syntax is 
     ```
-    
-2. FastSurfer
-    
-    ```bash
-    git clone --branch stable https://github.com/Deep-MI/FastSurfer.git
-    cd FastSurfer
+    singularity exec --nv \
+                     --no-home \
+                     -B /home/user/my_mri_data:/data \
+                     -B /home/user/my_fastsurfer_analysis:/output \
+                     -B /home/user/my_fs_license_dir:/fs_license \
+                     ./fastsurfer-gpu.sif \
+                     /fastsurfer/run_fastsurfer.sh 
+                     *fastsurfer-flags*
+   ```
+   The `--nv` flag is needed to allow FastSurfer to run on the GPU (otherwise FastSurfer will run on the CPU).
+
+   The `--no-home` flag tells singularity to not mount the home directory (see [Singularity documentation](Singularity/README.md#mounting-home) for more info).
+
+   The `-B` flag is used to tell singularity, which folders FastSurfer can read and write to.
+ 
+   See also __[Example 2](doc/overview/EXAMPLES.md#example-2-fastsurfer-singularity)__ for a full singularity FastSurfer run command and [the Singularity documentation](Singularity/README.md#fastsurfer-singularity-image-usage) for details on more singularity flags.  
+
+   (b) For __docker__, the syntax is
     ```
-    
-3. Python environment
-    
-    ```bash
-    conda env create -f ./env/fastsurfer.yml 
-    conda activate fastsurfer
+    docker run --gpus all \
+               -v /home/user/my_mri_data:/data \
+               -v /home/user/my_fastsurfer_analysis:/output \
+               -v /home/user/my_fs_license_dir:/fs_license \
+               --rm --user $(id -u):$(id -g) \
+               deepmi/fastsurfer:latest \
+               *fastsurfer-flags*
     ```
-    
-    - add the fastsurfer directory to the python path
-    
-    ```bash
-    export PYTHONPATH="${PYTHONPATH}:$PWD"
-    echo "export PYTHONPATH=\"\${PYTHONPATH}:$PWD\"" >> ~/.bashrc\
-    ```
-    
+   The `--gpus` flag is needed to allow FastSurfer to run on the GPU (otherwise FastSurfer will run on the CPU).
 
-1. Download Network Checkpoints
-    
-    ```bash
-    python3 FastSurferCNN/download_checkpoints.py --all
-    
-    ```
-    
+   The `-v` flag is used to tell docker, which folders FastSurfer can read and write to.
+ 
+   See also __[Example 1](doc/overview/EXAMPLES.md#example-1-fastsurfer-docker)__ for a full FastSurfer run inside a Docker container and [the Docker documentation](Docker/README.md#docker-flags) for more details on the docker flags including `--rm` and `--user`.
 
-1. 원본 데이터셋 형식 FastSurfer의 필요형식으로 변환 (
-    - `Mask_x.nii.gz` 파일들을 `orig.mgz`, `aparc.DKTatlas+aseg.mgz`, `aseg.auto_noCCseg.mgz` 파일로 변환하고 이동
-        
-        ![Untitled](https://prod-files-secure.s3.us-west-2.amazonaws.com/e7b50649-d2d9-4695-878c-45872b4c130e/60679928-2a7c-487f-b91e-dca2184e807c/Untitled.png)
-        
-        ![Untitled](https://prod-files-secure.s3.us-west-2.amazonaws.com/e7b50649-d2d9-4695-878c-45872b4c130e/4f6d7f72-f5f3-4f91-a354-e27cb6c5b2d0/Untitled.png)
-        
-        - dataset : 2678개(24시간 이상 걸림)
-        - run_prediction.py 자신의 환경에 맞게 실행하는 코드
-        - transform.py
-            
-            ```python
-            import os
-            import subprocess
-            
-            # Paths
-            input_dir = "/home/ehost/syoon/OASIS3_fastsurfer"
-            output_dir = "/home/ehost/syoon/data"
-            if not os.path.exists(output_dir):
-                os.makedirs(output_dir)
-            
-            # Find MR image files
-            origin_images = sorted([f for f in os.listdir(input_dir) if f.startswith('MRimages') and f.endswith('nii.gz')])
-            label_images = sorted([f for f in os.listdir(input_dir) if f.startswith('Mask') and f.endswith('nii.gz')])
-            
-            # Loop through each MR image and corresponding mask image
-            for origin_image, label_image in zip(origin_images, label_images):
-                subject_id = os.path.splitext(os.path.splitext(origin_image)[0])[0].split('_')[1]
-                input_image = os.path.join(input_dir, origin_image)
-                label_image_path = os.path.join(input_dir, label_image)
-            
-                # Output directory for the current subject
-                subject_output_dir = os.path.join(output_dir, f"subject{subject_id}")
-                if not os.path.exists(subject_output_dir):
-                    os.makedirs(subject_output_dir)
-                
-                cmd = [
-                    "python", "/home/ehost/syoon/FastSurfer/FastSurferCNN/run_prediction.py",
-                    "--t1", input_image,
-                    "--sd", subject_output_dir,
-                    "--batch_size", "1",
-                    "--threads", "1",
-                    "--device", "cuda",
-                    "--lut", "/home/ehost/syoon/FastSurfer/FastSurferCNN/config/FastSurfer_ColorLUT.tsv",
-                    "--brainmask_name", "brainmask.mgz",
-                    "--asegdkt_segfile", "aparc.DKTatals+aseg.mgz",
-                    "--conformed_name", "orig.mgz"
-                ]
-            
-                # Print and run the command
-                print(f"Running command for subject {subject_id}: {' '.join(cmd)}")
-                subprocess.run(cmd)
-            ```
-            
-2. dataset 나누기
-    - split1.py(train 1000개, test 300개)
-        
-        ```python
-        import os
-        import shutil
-        
-        # Set up a data path
-        data_dir = "/home/ehost/syoon/data"
-        subjects = sorted([f for f in os.listdir(data_dir) if os.path.isdir(os.path.join(data_dir, f))], key=lambda x: int(x.replace("subject", "")))
-        
-        # Specify train and test subject ranges
-        train_subjects = subjects[0:1000]
-        test_subjects = subjects[-300:]
-        
-        # Set path
-        train_dir = os.path.join(data_dir, "/home/ehost/syoon/dataset/train")
-        test_dir = os.path.join(data_dir, "/home/ehost/syoon/dataset/test")
-        
-        os.makedirs(train_dir, exist_ok=True)
-        os.makedirs(test_dir, exist_ok=True)
-        
-        def copy_files(subjects, destination):
-            for subject in subjects:
-                subject_path = os.path.join(data_dir, subject)
-                dest_path = os.path.join(destination, subject)
-                shutil.copytree(subject_path, dest_path)
-        
-        # Copy data
-        copy_files(train_subjects, train_dir)
-        copy_files(test_subjects, test_dir)
-        
-        print(f"Train subjects: {len(train_subjects)}")
-        print(f"Test subjects: {len(test_subjects)}")
-        ```
-        
-3. dataset directory CSV파일 생성 (여기부터 다시)
-    - generate_csv.py
-        
-        ```python
-        import os
-        import csv
-        
-        data_dir = '/home/ehost/syoon/dataset1000/train'
-        csv_filename = '/home/ehost/syoon/training_set_subjects_dirs1000.csv'
-        
-        # Get subject directories
-        subject_dirs = [d for d in os.listdir(data_dir) if os.path.isdir(os.path.join(data_dir, d))]
-        
-        # Sort directories numerically
-        subject_dirs = sorted(subject_dirs, key=lambda x: int(x.replace('subject', '')))
-        
-        # Create full paths
-        subject_dirs = [os.path.join(data_dir, subject) for subject in subject_dirs]
-        
-        # Write to CSV
-        with open(csv_filename, 'w', newline='') as csvfile:
-            csvwriter = csv.writer(csvfile)
-            for subject in subject_dirs:
-                csvwriter.writerow([subject])
-        
-        print(f'{csv_filename} The file has been created.')
-        ```
-        
+2. For a __native install__, you need to activate your FastSurfer environment (e.g. `conda activate fastsurfer_gpu`) and make sure you have added the FastSurfer path to your `PYTHONPATH` variable, e.g. `export PYTHONPATH=$(pwd)`. 
 
-### Hdf5-Trainingset Generation
+   You will then be able to run fastsurfer with `./run_fastsurfer.sh *fastsurfer-flags*`.
 
-- data 1000개
-- generate_hdf5.py 코드 수정한 함수들
-    - def _load_volumes()
-    
-    ```python
-        def _load_volumes(self, subject_path: str) -> Tuple[np.ndarray, np.ndarray, np.ndarray, Tuple]:
-            try:
-                print(f"subject_path = {subject_path}")
-    
-                orig_path = join(subject_path, self.orig_name)
-                aseg_path = join(subject_path, self.aparc_name)
-                aseg_nocc_path = join(subject_path, self.aparc_nocc) if self.aparc_nocc else None
-    
-                print(f"Loading original image from {orig_path}")
-                orig = nib.load(orig_path)
-                orig_data = np.asarray(orig.get_fdata(), dtype=np.uint8)
-    
-                zoom = orig.header.get_zooms()
-    
-                print(f"Loaded ground truth segmentation from {aseg_path}")
-                aseg = nib.load(aseg_path)
-                aseg_data = np.asarray(aseg.get_fdata(), dtype=np.int16)
-    
-                if aseg_nocc_path:
-                    print(f"Loading segmentation without corpus callosum from {aseg_nocc_path}")
-                    aseg_nocc = nib.load(aseg_nocc_path)
-                    aseg_nocc_data = np.asarray(aseg_nocc.get_fdata(), dtype=np.int16)
-                else:
-                    aseg_nocc_data = None
-    
-                return orig_data, aseg_data, aseg_nocc_data, zoom
-    
-            except Exception as e:
-                print(f"Error loading volumes from {subject_path}: {e}")
-                raise
-    ```
-    
-    - def create_hdf5_dataset()
-    
-    ```python
-        def create_hdf5_dataset(self, blt: int):
-            data_per_size = defaultdict(lambda: defaultdict(list))
-            start_d = time.time()
-    
-            for idx, current_subject in enumerate(self.subject_dirs):
-                try:
-                    start = time.time()
-    
-                    print(f"Processing subject {idx + 1}/{len(self.subject_dirs)}: {current_subject}")
-    
-                    orig, aseg, aseg_nocc, zoom = self._load_volumes(current_subject)
-                    size, _, _ = orig.shape
-    
-                    mapped_aseg, mapped_aseg_sag = map_aparc_aseg2label(
-                        aseg,
-                        self.labels,
-                        self.labels_sag,
-                        self.lateralization,
-                        aseg_nocc,
-                        processing=self.processing,
-                    )
-    
-                    if self.plane == "sagittal":
-                        mapped_aseg = mapped_aseg_sag
-                        weights = create_weight_mask(
-                            mapped_aseg,
-                            max_weight=self.max_weight,
-                            ctx_thresh=19,
-                            max_edge_weight=self.edge_weight,
-                            max_hires_weight=self.hires_weight,
-                            cortex_mask=self.gm_mask,
-                            gradient=self.gradient,
-                        )
-    
-                    else:
-                        weights = create_weight_mask(
-                            mapped_aseg,
-                            max_weight=self.max_weight,
-                            ctx_thresh=33,
-                            max_edge_weight=self.edge_weight,
-                            max_hires_weight=self.hires_weight,
-                            cortex_mask=self.gm_mask,
-                            gradient=self.gradient,
-                        )
-    
-                    print(f"Created weights for subject {idx + 1}")
-    
-                    # transform volumes to correct shape
-                    [orig, mapped_aseg, weights], zoom = self.transform(self.plane, [orig, mapped_aseg, weights], zoom)
-    
-                    # Create Thick Slices, filter out blanks
-                    orig_thick = get_thick_slices(orig, self.slice_thickness)
-    
-                    orig, mapped_aseg, weights = filter_blank_slices_thick(
-                        orig_thick, mapped_aseg, weights, threshold=blt
-                    )
-    
-                    num_batch = orig.shape[2]
-                    orig = np.transpose(orig, (2, 0, 1, 3))
-                    mapped_aseg = np.transpose(mapped_aseg, (2, 0, 1))
-                    weights = np.transpose(weights, (2, 0, 1))
-    
-                    data_per_size[f"{size}"]["orig"].extend(orig)
-                    data_per_size[f"{size}"]["aseg"].extend(mapped_aseg)
-                    data_per_size[f"{size}"]["weight"].extend(weights)
-                    data_per_size[f"{size}"]["zoom"].extend((zoom,) * num_batch)
-                    sub_name = current_subject.split("/")[-1]
-                    data_per_size[f"{size}"]["subject"].append(
-                        sub_name.encode("ascii", "ignore")
-                    )
-    
-                    print(f"Processed subject {idx + 1}")
-    
-                except Exception as e:
-                    #LOGGER.info("Volume: {} Failed Reading Data. Error: {}".format(idx, e))
-                    print(f"Volume: {idx + 1} Failed Reading Data. Error: {e}")
-                    continue
-    
-            for key, data_dict in data_per_size.items():
-                data_per_size[key]["orig"] = np.asarray(data_dict["orig"], dtype=np.uint8)
-                data_per_size[key]["aseg"] = np.asarray(data_dict["aseg"], dtype=np.uint8)
-                data_per_size[key]["weight"] = np.asarray(data_dict["weight"], dtype=float)
-    
-            with h5py.File(self.dataset_name, "w") as hf:
-                dt = h5py.special_dtype(vlen=str)
-                for key, data_dict in data_per_size.items():
-                    group = hf.create_group(f"{key}")
-                    group.create_dataset("orig_dataset", data=data_dict["orig"])
-                    group.create_dataset("aseg_dataset", data=data_dict["aseg"])
-                    group.create_dataset("weight_dataset", data=data_dict["weight"])
-                    group.create_dataset("zoom_dataset", data=data_dict["zoom"])
-                    group.create_dataset("subject", data=data_dict["subject"], dtype=dt)
-    
-            end_d = time.time() - start_d
-            print(f"Successfully written {self.dataset_name} in {end_d:.3f} seconds.")
-    ```
-    
+   See also [Example 3](doc/overview/EXAMPLES.md#example-3-native-fastsurfer-on-subjectx-with-parallel-processing-of-hemis) for an illustration of the commands to run the entire FastSurfer pipeline (FastSurferCNN + recon-surf) natively.
 
-```bash
-cd FastSurfer/FastSurferCNN
-```
+<!-- start of flags -->
+### FastSurfer_Flags
+Please refer to [FASTSURFER_FLAGS](doc/overview/FLAGS.md).
 
-```bash
-python3 generate_hdf5.py \
---hdf5_name /home/ehost/syoon/hdf5/training_set_sagittal.hdf5 \
---data_dir /home/ehost/syoon/dataset1000/train \
---csv_file /home/ehost/syoon/training_set_subjects_dirs1000.csv \
---plane sagittal \
---image_name orig.mgz \
---gt_name aparc.DKTatlas+aseg.mgz \
---gt_nocc mri/aseg.auto_noCCseg.mgz
-```
 
-```bash
-python3 generate_hdf5.py \
---hdf5_name /home/ehost/syoon/hdf5/validation_set_sagittal.hdf5 \
---data_dir /home/ehost/syoon/dataset1000/val \
---csv_file /home/ehost/syoon/validation_set_subjects_dirs1000.csv \
---plane sagittal \
---image_name orig.mgz \
---gt_name aparc.DKTatlas+aseg.mgz \
---gt_nocc mri/aseg.auto_noCCseg.mgz
-```
+## Examples
+All the examples can be found here: [FASTSURFER_EXAMPLES](doc/overview/EXAMPLES.md)
+- [Example 1: FastSurfer Docker](doc/overview/EXAMPLES.md#example-1-fastsurfer-docker)
+- [Example 2: FastSurfer Singularity](doc/overview/EXAMPLES.md#example-2-fastsurfer-singularity)
+- [Example 3: Native FastSurfer on subjectX with parallel processing of hemis](doc/overview/EXAMPLES.md#example-3-native-fastsurfer-on-subjectx-with-parallel-processing-of-hemis)
+- [Example 4: FastSurfer on multiple subjects](doc/overview/EXAMPLES.md#example-4-fastsurfer-on-multiple-subjects)
+- [Example 5: Quick Segmentation](doc/overview/EXAMPLES.md#example-5-quick-segmentation)
+- [Example 6: Running FastSurfer on a SLURM cluster via Singularity](doc/overview/EXAMPLES.md#example-6-running-fastsurfer-on-a-slurm-cluster-via-singularity)
 
-```bash
-python3 generate_hdf5.py \
---hdf5_name /home/ehost/syoon/hdf5/training_set_coronal.hdf5 \
---data_dir /home/ehost/syoon/dataset1000/train \
---csv_file /home/ehost/syoon/training_set_subjects_dirs1000.csv \
---plane coronal \
---image_name orig.mgz \
---gt_name aparc.DKTatlas+aseg.mgz \
---gt_nocc mri/aseg.auto_noCCseg.mgz
-```
 
-```bash
-python3 generate_hdf5.py \
---hdf5_name /home/ehost/syoon/hdf5/validation_set_coronal.hdf5 \
---data_dir /home/ehost/syoon/dataset1000/val \
---csv_file /home/ehost/syoon/validation_set_subjects_dirs1000.csv \
---plane coronal \
---image_name orig.mgz \
---gt_name aparc.DKTatlas+aseg.mgz \
---gt_nocc mri/aseg.auto_noCCseg.mgz
-```
+## Output files
 
-```bash
-python3 generate_hdf5.py \
---hdf5_name /home/ehost/syoon/hdf5/training_set_axial.hdf5 \
---data_dir /home/ehost/syoon/dataset1000/train \
---csv_file /home/ehost/syoon/training_set_subjects_dirs1000.csv \
---plane axial \
---image_name orig.mgz \
---gt_name aparc.DKTatlas+aseg.mgz \
---gt_nocc mri/aseg.auto_noCCseg.mgz
-```
+Modules output can be found here: [FastSurfer_Output_Files](doc/overview/OUTPUT_FILES.md)
+- [Segmentation module](doc/overview/OUTPUT_FILES.md#segmentation-module)
+- [Cerebnet module](doc/overview/OUTPUT_FILES.md#cerebnet-module)
+- [Surface module](doc/overview/OUTPUT_FILES.md#surface-module)
 
-```bash
-python3 generate_hdf5.py \
---hdf5_name /home/ehost/syoon/hdf5/validataion_set_axial.hdf5 \
---data_dir /home/ehost/syoon/dataset1000/val \
---csv_file /home/ehost/syoon/validation_set_subjects_dirs1000.csv \
---plane axial \
---image_name orig.mgz \
---gt_name aparc.DKTatlas+aseg.mgz \
---gt_nocc mri/aseg.auto_noCCseg.mgz
-```
+<!-- start of system requirements -->
+## System Requirements
 
-optimization.py에서 networks import error 이슈
+Recommendation: At least 8 GB system memory and 8 GB NVIDIA graphics memory ``--viewagg_device gpu``  
 
-→ from FastSurferCNN.models.networks import FastSurferCNN, FastSurferVINN
+Minimum: 7 GB system memory and 2 GB graphics memory ``--viewagg_device cpu --vox_size 1``
 
-```python
-python3 run_model.py \
---cfg config/FastSurferVINN.yaml \
-DATA.PATH_HDF5_TRAIN hdf5_sets1000/training_set_coronal.hdf5 \
-DATA.PATH_HDF5_VAL hdf5_sets1000/validation_set_coronal.hdf5 \
-DATA.PLANE coronal
+Minimum CPU-only: 8 GB system memory (much slower, not recommended) ``--device cpu --vox_size 1`` 
 
-```
+### Minimum Requirements:
 
-```python
-python3 run_model.py \
---cfg config/FastSurferVINN.yaml \
-DATA.PATH_HDF5_TRAIN hdf5_sets1000/training_set_axial.hdf5 \
-DATA.PATH_HDF5_VAL hdf5_sets1000/validation_set_axial.hdf5 \
-DATA.PLANE axial
+|       | --viewagg_device | Min GPU (in GB) | Min CPU (in GB) |
+|:------|------------------|----------------:|----------------:|
+| 1mm   | gpu              |               5 |               5 |
+| 1mm   | cpu              |               2 |               7 |
+| 0.8mm | gpu              |               8 |               6 |
+| 0.8mm | cpu              |               3 |               9 |
+| 0.7mm | gpu              |               8 |               6 |
+| 0.7mm | cpu              |               3 |               9 |
 
-```
 
-```python
-python3 run_model.py \
---cfg config/FastSurferVINN.yaml \
-DATA.PATH_HDF5_TRAIN hdf5_sets1000/training_set_sagittal.hdf5 \
-DATA.PATH_HDF5_VAL hdf5_sets1000/validation_set_sagittal.hdf5 \
-DATA.PLANE sagittal
+## Expert usage
+Individual modules and the surface pipeline can be run independently of the full pipeline script documented in this documentation. 
+This is documented in READMEs in subfolders, for example: [whole brain segmentation only with FastSurferVINN](FastSurferCNN/README.md), [cerebellum sub-segmentation](CerebNet/README.md), [hypothalamic sub-segmentation](HypVINN/README.md) and [surface pipeline only (recon-surf)](recon_surf/README.md).
 
-```
+Specifically, the segmentation modules feature options for optimized parallelization of batch processing.
+
+
+## FreeSurfer Downstream Modules
+
+FreeSurfer provides several Add-on modules for downstream processing, such as subfield segmentation ( [hippocampus/amygdala](https://surfer.nmr.mgh.harvard.edu/fswiki/HippocampalSubfieldsAndNucleiOfAmygdala), [brainstem](https://surfer.nmr.mgh.harvard.edu/fswiki/BrainstemSubstructures), [thalamus](https://freesurfer.net/fswiki/ThalamicNuclei) and [hypothalamus](https://surfer.nmr.mgh.harvard.edu/fswiki/HypothalamicSubunits) ) as well as [TRACULA](https://surfer.nmr.mgh.harvard.edu/fswiki/Tracula). We now provide symlinks to the required files, as FastSurfer creates them with a different name (e.g. using "mapped" or "DKT" to make clear that these file are from our segmentation using the DKT Atlas protocol, and mapped to the surface). Most subfield segmentations require `wmparc.mgz` and work very well with FastSurfer,  so feel free to run those pipelines after FastSurfer. TRACULA requires `aparc+aseg.mgz` which we now link, but have not tested if it works, given that [DKT-atlas](https://mindboggle.readthedocs.io/en/latest/labels.html) merged a few labels. You should source FreeSurfer 7.3.2 to run these modules. 
+
+
+## Intended Use
+
+This software can be used to compute statistics from an MR image for research purposes. Estimates can be used to aggregate population data, compare groups etc. The data should not be used for clinical decision support in individual cases and, therefore, does not benefit the individual patient. Be aware that for a single image, produced results may be unreliable (e.g. due to head motion, imaging artefacts, processing errors etc). We always recommend to perform visual quality checks on your data, as also your MR-sequence may differ from the ones that we tested. No contributor shall be liable to any damages, see also our software [LICENSE](LICENSE). 
+
+<!-- start of references -->
+## References
+
+If you use this for research publications, please cite:
+
+_Henschel L, Conjeti S, Estrada S, Diers K, Fischl B, Reuter M, FastSurfer - A fast and accurate deep learning based neuroimaging pipeline, NeuroImage 219 (2020), 117012. https://doi.org/10.1016/j.neuroimage.2020.117012_
+
+_Henschel L*, Kuegler D*, Reuter M. (*co-first). FastSurferVINN: Building Resolution-Independence into Deep Learning Segmentation Methods - A Solution for HighRes Brain MRI. NeuroImage 251 (2022), 118933. http://dx.doi.org/10.1016/j.neuroimage.2022.118933_
+
+_Faber J*, Kuegler D*, Bahrami E*, et al. (*co-first). CerebNet: A fast and reliable deep-learning pipeline for detailed cerebellum sub-segmentation. NeuroImage 264 (2022), 119703. https://doi.org/10.1016/j.neuroimage.2022.119703_
+
+_Estrada S, Kuegler D, Bahrami E, Xu P, Mousa D, Breteler MMB, Aziz NA, Reuter M. FastSurfer-HypVINN: Automated sub-segmentation of the hypothalamus and adjacent structures on high-resolutional brain MRI. Imaging Neuroscience 2023; 1 1–32. https://doi.org/10.1162/imag_a_00034_
+
+Stay tuned for updates and follow us on [X/Twitter](https://twitter.com/deepmilab).
+
+<!-- start of acknowledgements -->
+## Acknowledgements
+
+This project is partially funded by:
+- [Chan Zuckerberg Initiative](https://chanzuckerberg.com/eoss/proposals/fastsurfer-ai-based-neuroimage-analysis-package/)
+- [German Federal Ministry of Education and Research](https://www.gesundheitsforschung-bmbf.de/de/deepni-innovative-deep-learning-methoden-fur-die-rechnergestutzte-neuro-bildgebung-10897.php)
+
+The recon-surf pipeline is largely based on [FreeSurfer](https://surfer.nmr.mgh.harvard.edu/fswiki/FreeSurferMethodsCitation).
