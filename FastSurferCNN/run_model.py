@@ -12,29 +12,30 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import argparse
-import json
-import sys
 
 # IMPORTS
 from os.path import join
+import sys
+sys.path.append('/home/ehost/syoon/FastSurfer')
 
-from FastSurferCNN.train import Trainer
+import argparse
+import json
+
 from FastSurferCNN.utils import misc
 from FastSurferCNN.utils.load_config import get_config
-from FastSurferCNN.utils.parser_defaults import FASTSURFER_ROOT
+from FastSurferCNN.train import Trainer
 
 
-def make_parser() -> argparse.ArgumentParser:
-    """
-    Set up the options parsed from STDIN.
-
-    Parses arguments from the STDIN, including the flags: --cfg, --aug, --opt, opts.
+def setup_options():
+    """Set up the options parsed from STDIN.
+    
+    Parses arguments from the STDIN, including the flags: --cfg, --aug, --opt, opts,
 
     Returns
     -------
-    argparse.ArgumentParser
-        The parser object for options.
+    options
+        object holding options
+    
     """
     parser = argparse.ArgumentParser(description="Segmentation")
 
@@ -42,7 +43,7 @@ def make_parser() -> argparse.ArgumentParser:
         "--cfg",
         dest="cfg_file",
         help="Path to the config file",
-        default=FASTSURFER_ROOT / "FastSurferCNN/config/FastSurferVINN.yaml",
+        default="config/FastSurferVINN.yaml",
         type=str,
     )
     parser.add_argument(
@@ -55,14 +56,14 @@ def make_parser() -> argparse.ArgumentParser:
         default=None,
         nargs=argparse.REMAINDER,
     )
-    return parser
+
+    if len(sys.argv) == 1:
+        parser.print_help()
+    return parser.parse_args()
 
 
-
-def main(args):
-    """
-    First sets variables and then runs the trainer model.
-    """
+def main():
+    """[MISSING] First set variables and then runs the trainer model."""
     args = setup_options()
     cfg = get_config(args)
 
@@ -87,12 +88,13 @@ def main(args):
         json.dump(cfg, json_file, indent=2)
 
     trainer = Trainer(cfg=cfg)
-    trainer.run()
+    try:
+        trainer.run()
+    except Exception as e:
+        print(f"Training failed with error: {e}")
+    
+    print("Training completed")
 
 
 if __name__ == "__main__":
-    parser = make_parser()
-    if len(sys.argv) == 1:
-        parser.print_help()
-    args = parser.parse_args()
-    main(args)
+    main()

@@ -13,37 +13,34 @@
 # limitations under the License.
 
 # IMPORTS
-from typing import Union
-
 import torch
+from typing import Union
 import yacs
+import sys
+sys.path.append('/home/ehost/syoon/FastSurfer')
 
 from FastSurferCNN.models.networks import FastSurferCNN, FastSurferVINN
 
-
-def get_optimizer(
-    model: FastSurferCNN | FastSurferVINN | torch.nn.DataParallel,
-    cfg: yacs.config.CfgNode,
-) -> torch.optim.Optimizer:
-    """
-    Get an instance of requested optimizer.
+def get_optimizer(model: Union[FastSurferCNN, FastSurferVINN, torch.nn.DataParallel], cfg: yacs.config.CfgNode) -> torch.optim.Optimizer:
+    """Get an instance of requested optimizer.
 
     Parameters
     ----------
-    model : FastSurferCNN, FastSurferVINN, torch.nn.DataParallel
-        The model for which an optimizer should be chosen.
+    model : Union[FastSurferCNN, FastSurferVINN, torch.nn.DataParallel]
+        The model for which an optimizer schould be chosen
     cfg : yacs.config.CfgNode
-        Configuration Node.
+        Configuration Node
 
     Returns
     -------
     torch.optim.optimizer.Optimizer
-        SGD, Adam, AdamW or rmsprop optimizer.
+        SGD, Adam, AdamW or rmsprop optimizer
 
     Raises
     ------
     NotImplementedError
-        Optimizer is not supported.
+        Optimizer is not supported
+
     """
     if cfg.OPTIMIZER.OPTIMIZING_METHOD == "sgd":
         return torch.optim.SGD(

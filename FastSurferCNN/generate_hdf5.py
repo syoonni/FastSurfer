@@ -13,7 +13,8 @@
 # limitations under the License.
 
 import glob
-
+import os 
+os.environ['KMP_DUPLICATE_LIB_OK']='True'
 # IMPORTS
 import time
 from collections import defaultdict
@@ -26,6 +27,7 @@ import nibabel as nib
 import numpy as np
 from numpy import ndarray
 from numpy import typing as npt
+
 
 from FastSurferCNN.data_loader.data_utils import (
     create_weight_mask,
@@ -165,14 +167,17 @@ class H5pyDataset:
                 self.subject_dirs = [line.strip() for line in s_dirs.readlines()]
 
         else:
-            self.search_pattern = join(self.data_path, params["pattern"])
+            print('self.data_path = ', self.data_path)
+            print('params["pattern"] = ', params["pattern"])
+            self.search_pattern = os.path.join(self.data_path, params["pattern"])
+            print('self.search_pattern = ', self.search_pattern)
             self.subject_dirs = glob.glob(self.search_pattern)
+            #self.subject_dirs=glob.glob(self.data_path)
+            print('self.subject_dirs = ', self.subject_dirs)
 
         self.data_set_size = len(self.subject_dirs)
 
-    def _load_volumes(
-        self, subject_path: str
-    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, Tuple]:
+    def _load_volumes(self, subject_path: str) -> Tuple[np.ndarray, np.ndarray, np.ndarray, Tuple]:
         """
         Load the given image and segmentation and gets the zoom values.
 
@@ -194,28 +199,35 @@ class H5pyDataset:
         tuple
             Zoom values.
         """
-        # Load the orig and extract voxel spacing information (x, y, and z dim)
-        LOGGER.info(
-            "Processing intensity image {} and ground truth segmentation {}".format(
-                self.orig_name, self.aparc_name
-            )
-        )
-        orig = nib.load(join(subject_path, self.orig_name))
-        # Load the segmentation ground truth
-        aseg = np.asarray(
-            nib.load(join(subject_path, self.aparc_name)).get_fdata(), dtype=np.int16
-        )
+        try:
+            print(f"subject_path = {subject_path}")
 
-        zoom = orig.header.get_zooms()
-        orig = np.asarray(orig.get_fdata(), dtype=np.uint8)
+            orig_path = join(subject_path, self.orig_name)
+            aseg_path = join(subject_path, self.aparc_name)
+            aseg_nocc_path = join(subject_path, self.aparc_nocc) if self.aparc_nocc else None
 
-        if self.aparc_nocc is not None:
-            aseg_nocc = nib.load(join(subject_path, self.aparc_nocc))
-            aseg_nocc = np.asarray(aseg_nocc.get_fdata(), dtype=np.int16)
-        else:
-            aseg_nocc = None
+            print(f"Loading original image from {orig_path}")
+            orig = nib.load(orig_path)
+            orig_data = np.asarray(orig.get_fdata(), dtype=np.uint8)
 
-        return orig, aseg, aseg_nocc, zoom
+            zoom = orig.header.get_zooms()
+
+            print(f"Loaded ground truth segmentation from {aseg_path}")
+            aseg = nib.load(aseg_path)
+            aseg_data = np.asarray(aseg.get_fdata(), dtype=np.int16)
+
+            if aseg_nocc_path:
+                print(f"Loading segmentation without corpus callosum from {aseg_nocc_path}")
+                aseg_nocc = nib.load(aseg_nocc_path)
+                aseg_nocc_data = np.asarray(aseg_nocc.get_fdata(), dtype=np.int16)
+            else:
+                aseg_nocc_data = None
+
+            return orig_data, aseg_data, aseg_nocc_data, zoom
+
+        except Exception as e:
+            print(f"Error loading volumes from {subject_path}: {e}")
+            raise
 
     def transform(
         self, plane: str, imgs: npt.NDArray, zoom: npt.NDArray
@@ -289,11 +301,13 @@ class H5pyDataset:
             try:
                 start = time.time()
 
-                LOGGER.info(
-                    "Volume Nr: {} Processing MRI Data from {}/{}".format(
-                        idx + 1, current_subject, self.orig_name
-                    )
-                )
+                print(f"Processing subject {idx + 1}/{len(self.subject_dirs)}: {current_subject}")
+
+                # LOGGER.info(
+                #     "Volume Nr: {} Processing MRI Data from {}/{}".format(
+                #         idx + 1, current_subject, self.orig_name
+                #     )
+                # )
 
                 orig, aseg, aseg_nocc, zoom = self._load_volumes(current_subject)
                 size, _, _ = orig.shape
@@ -330,21 +344,21 @@ class H5pyDataset:
                         gradient=self.gradient,
                     )
 
-                print(
-                    "Created weights with max_w {}, gradient {},"
-                    " edge_w {}, hires_w {}, gm_mask {}".format(
-                        self.max_weight,
-                        self.gradient,
-                        self.edge_weight,
-                        self.hires_weight,
-                        self.gm_mask,
-                    )
-                )
+                # print(
+                #     "Created weights with max_w {}, gradient {},"
+                #     " edge_w {}, hires_w {}, gm_mask {}".format(
+                #         self.max_weight,
+                #         self.gradient,
+                #         self.edge_weight,
+                #         self.hires_weight,
+                #         self.gm_mask,
+                #     )
+                # )
+
+                print(f"Created weights for subject {idx + 1}")
 
                 # transform volumes to correct shape
-                [orig, mapped_aseg, weights], zoom = self.transform(
-                    [orig, mapped_aseg, weights], zoom
-                )
+                [orig, mapped_aseg, weights], zoom = self.transform(self.plane, [orig, mapped_aseg, weights], zoom)
 
                 # Create Thick Slices, filter out blanks
                 orig_thick = get_thick_slices(orig, self.slice_thickness)
@@ -367,8 +381,11 @@ class H5pyDataset:
                     sub_name.encode("ascii", "ignore")
                 )
 
+                print(f"Processed subject {idx + 1}")
+
             except Exception as e:
-                LOGGER.info("Volume: {} Failed Reading Data. Error: {}".format(idx, e))
+                #LOGGER.info("Volume: {} Failed Reading Data. Error: {}".format(idx, e))
+                print(f"Volume: {idx + 1} Failed Reading Data. Error: {e}")
                 continue
 
         for key, data_dict in data_per_size.items():
@@ -387,11 +404,12 @@ class H5pyDataset:
                 group.create_dataset("subject", data=data_dict["subject"], dtype=dt)
 
         end_d = time.time() - start_d
-        LOGGER.info(
-            "Successfully written {} in {:.3f} seconds.".format(
-                self.dataset_name, end_d
-            )
-        )
+        # LOGGER.info(
+        #     "Successfully written {} in {:.3f} seconds.".format(
+        #         self.dataset_name, end_d
+        #     )
+        # )
+        print(f"Successfully written {self.dataset_name} in {end_d:.3f} seconds.")
 
 
 def make_parser():
@@ -429,7 +447,7 @@ def make_parser():
         help="Csv-file listing subjects to include in file",
     )
     parser.add_argument(
-        "--pattern", type=str, help="Pattern to match files in directory."
+        "--pattern", type=str, default='/*/', help="Pattern to match files in directory."
     )
     parser.add_argument(
         "--image_name",
@@ -457,7 +475,7 @@ def make_parser():
     parser.add_argument(
         "--lut",
         type=Path,
-        default=FASTSURFER_ROOT / "/config/FastSurfer_ColorLUT.tsv",
+        default=join(dirname(__file__),  "config/FastSurfer_ColorLUT.tsv"),
         help="FreeSurfer-style Color Lookup Table with labels to use in final prediction. "
         "Has to have columns: ID	LabelName	R	G	B	A"
         "Default: FASTSURFERDIR/FastSurferCNN/config/FastSurfer_ColorLUT.tsv.",
